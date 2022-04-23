@@ -15,7 +15,7 @@ output:
 
 This paper will discuss the relationship between Personal Income and the Consumer Price Index. Using a Vector AutoRegression (VAR) model, this paper will explore these two measures of economic health as they relate to each other. In short, Personal Income and the CPI are tightly linked together. 
 
-For more information, visit the GitHub: 
+For more information, visit the GitHub: https://itsharryh3w.github.io/ 
 
 ```{r Setup, include=FALSE}
 rm(list=ls())
