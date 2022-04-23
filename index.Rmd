@@ -1,0 +1,184 @@
+---
+title: "VAR Project"
+author: "Hewson"
+date: "`r format(Sys.Date(),'%B %d, %Y')`"
+output: 
+  html_document:
+    df_print: paged
+    code_folding: "hide"
+    toc: yes
+    fig_caption: yes
+    theme: cerulean
+    toc_float: no
+---
+
+
+This paper will discuss the relationship between Personal Income and the Consumer Price Index. Using a Vector AutoRegression (VAR) model, this paper will explore these two measures of economic health as they relate to each other. In short, Personal Income and the CPI are tightly linked together. 
+
+For more information, visit the GitHub: 
+
+```{r Setup, include=FALSE}
+rm(list=ls())
+graphics.off()
+knitr::opts_chunk$set(
+	echo = TRUE,
+	message = FALSE,
+	warning = FALSE
+)
+```
+
+
+### Choosing the Variables
+
+This paper will be using Personal Income and Consumer Price Index to explore their use as measures of economic health. 
+
+From FRED, Personal Income (PI) is defined as "the income that persons receive in return for their provision of labor, land, and capital used in current production and the net current transfer payments that they receive from business and from government.[...] (PI) is equal to national income minus corporate profits with inventory valuation and capital consumption adjustments, taxes on production and imports less subsidies, contributions for government social insurance, net interest and miscellaneous payments on assets, business current transfer payments (net), current surplus of government enterprises, and wage accruals less disbursements, plus personal income receipts on assets and personal current transfer receipts."[1]
+
+PI is measured in billions of dollars monthly and seasonally adjusted. It should be noted, PI is not the same as median income or average income, but rather a complete total for all persons and their collective income. 
+
+Consumer Price Index for All Urban Consumers: All Items in U.S. City Average (CPIAUCSL) is defined as "a price index of a basket of goods and services paid by urban consumers. Percent changes in the price index measure the inflation rate between any two time periods. The most common inflation metric is the percent change from one year ago. It can also represent the buying habits of urban consumers. This particular index includes roughly 88 percent of the total population, accounting for wage earners, clerical workers, technical workers, self-employed, short-term workers, unemployed, retirees, and those not in the labor force."[2]
+
+CPIAUCSL is also measured in months, albeit with a different unit measurement, as CPI is reported in percent change in time. 
+
+These variables were selected for their intrinsic link. The more income one has, the more they have to spend on goods, thus increasing the basket of goods used in the CPI.
+
+For ease of reading, a chart describing the variables is provided below:
+
+### Describe the Variables
+
+***
+***
+
+| Variable | Description | |
+|:-----:|:------|----|
+| PI |	 Personal Income, Billions of dollars, Monthly, Seasonally Adjusted Annual Rate 	|  |	
+| CPIAUCSL | Consumer Price Index for All Urban Consumers: All Items, Percent, Monthly, Seasonally Adjusted |  |
+
+```{r Packages}
+require(fpp3)
+require(tidyverse)
+require(dplyr)
+require(tidyquant)
+require(lubridate)
+require(timetk)
+require(vars)
+require(lmtest)
+require(kableExtra)
+```
+
+```{r Load the Data}
+varList <- c("PI", "CPIAUCSL")
+X <- tq_get(varList, get = "economic.data", from = "1960-01-01") %>%
+  mutate(Month = yearmonth(date)) %>% dplyr::select(-date) %>%
+  as_tsibble(index = Month, key = symbol)
+Xw <- X %>%
+  pivot_wider(names_from = symbol, values_from = price) %>%
+  as_tsibble()
+```
+
+
+### Determining the Model
+
+With the variables loaded, the analysis can begin. 
+```{r Plot the Data}
+X %>% ggplot(aes(x = Month, y = price)) +
+  geom_line() +
+  facet_grid(vars(symbol), scales = "free_y") 
+```
+
+This graph indicates that there is a strong upward trend between these two variables. Both appear to peak and trough at roughly the same time. This suggests there is a strong relationship between Personal Income and CPI. Before further testing can occur, a unit root test for stationary data is conducted.
+
+```{r Unit Roots}
+X %>% 
+  features(price, unitroot_ndiffs) %>% 
+  kable(format = "html", table.attr = "style='width:30%;' ") %>% 
+  kableExtra::kable_styling()
+```
+
+This test demonstrates that there are at least two unit roots in these variables. In other words, these variables contain two unit roots and are therefore non-stationary. Essentially, these are dynamic variables. The table below further shows that Personal Income is non-stationary, as evidenced by the low P-value 0.01. 
+
+```{r}
+X %>% filter(symbol == "PI") %>% 
+  features(log(price), unitroot_kpss) %>% 
+  kable(format = "html", table.attr = "style='width:30%;' ") %>% 
+  kableExtra::kable_styling()
+```
+
+This is important because this will impact lags in the data later on. 
+
+With the unit root tests out of the way, we can officially begin to model the relationship between Personal Income and CPI.
+
+
+### Producing the Results
+
+To actually use this dataset, we must fist reformat the data into a version that cna read in by the packages loaded in earlier. This process is different for each variable due to differences in data types. 
+
+For Personal Income, the process is:
+$$
+gPI = 100 * \delta(log(PI))
+$$
+where $gPI$ is the change in Personal Income.
+
+For CPI, the process is:
+$$
+dCPI = \delta(CPIAUCSL)
+$$
+where $dCPI$ is the change in CPI.
+
+```{r Data Mutation}
+ZCPI <- Xw %>%
+  mutate(gPI = 100 * difference(log(PI)),
+         dCPI = difference(CPIAUCSL), lag = 1) %>%
+  dplyr::select(gPI, dCPI) %>% 
+  tidyr::drop_na() 
+zlead <- as.ts(ZCPI, start = c(1960,2), frequency = 12)
+```
+
+With the variables modified to taste, we can now officially begin the VAR modeling process. A VAR model is essentially a reduced form dynamic multivariate regression that is useful in studying time series data. 
+
+```{r VAR part 1}
+require(vars)
+# put variable in order: CPI, gPI
+zl <- zlead[,c(2,1)]
+tmp <- VARselect(zl,lag.max=12,type="const")
+tmp
+pl <- tmp$selection[2]
+```
+
+This above chart tells us the appropriate number of lags to use in the VAR model. 12 lags ought to be enough (AIC = 12) and makes sense, as this data is measured in months and there are 12 months in a year. 
+
+From here, the VAR model can be built.
+
+```{r VAR Model}
+# estimate the VAR(p)
+var.CPI <- VAR(zl,p=pl,type="const")
+summary(var.CPI)
+```
+
+From this chart, we can determine that there is a lot of collinearity in these variables. In other words, it's difficult to determine which variable leads. To do this, a Granger test of causality is performed.
+
+```{r zlead }
+require(lmtest)
+cat("H0: gPI does not cause dCPI,  H1: it does \n")
+grangertest(dCPI ~ gPI,order=pl,data=zl)
+cat("\nH0: dCPI does not cause gPI,  H1: it does\n")
+grangertest(gPI ~ dCPI,order=pl,data=zl)
+```
+
+Once again, the data is very closely linked. The F-test results are very similar, thus making it difficult difficult to determine which variable leads. Running an impulse response can help visualize the data so we can better determine the leading data.
+
+```{r Impluse Response}
+plot(irf(var.CPI, n.ahead = 12, boot = TRUE ))
+```
+
+```{r Leading Chart}
+fevd(var.CPI, n.ahead = 12)
+```
+
+### Summary
+
+Thanks to the Granger visualizations, we can learn that when CPI changes in Chart dCPI, Personal Income has some degree of movement, however it's not much. In Chart gPI, when Personal Income changes, CPI barely moves an inch. This indicates that CPI leads Personal Income. This is further confirmed in the Leading Chart. At the end of the day, these two variables are very closely linked and any shock to one will affect the other, albeit marginally. These two appear to be incredibly resilient to shocks to the other. 
+
+### References
+[1] - https://fred.stlouisfed.org/series/PI
+[2] - https://fred.stlouisfed.org/series/CPIAUCSL 
